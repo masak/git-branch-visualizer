@@ -180,7 +180,7 @@ multi MAIN() {
             highlight($branch);
 
         my $prefix = (@deltas ?? "│ " !! "") ~ @deltas.map(" " x *.chars).join(" " x 3) ~ (@deltas ?? " " !! "") ~ "   ";
-        for %branches-steps-behind{$steps}.sort(*.date).reverse.kv -> $i, $branch {
+        for (%branches-steps-behind{$steps} // []).sort(*.date).reverse.kv -> $i, $branch {
             my $is-last = $i == %branches-steps-behind{$steps} - 1;
             say b($prefix),
                 b($is-last ?? "└─" !! "├─"),
@@ -191,7 +191,9 @@ multi MAIN() {
                 ($branch.diverged-remote ?? colored(" [NEEDS PUSH FORCE]", "bold blue") !! ""),
                 ($branch.pr ?? colored(" (PR #{$branch.pr})", "bold blue") !! "");
         }
-        say b($prefix);
+        if @orphaned-branches {
+            say b($prefix);
+        }
     }
 
     if @orphaned-branches {
@@ -248,6 +250,17 @@ multi MAIN("test") {
         is $tr.output, q:to<EXPECTED>, "Master with one branch ahead";
             ─ master
               └─3─ ahead
+            EXPECTED
+    }
+
+    given TestRepo.new -> $tr {
+        $tr.checkout-new-branch("behind");
+        $tr.commit;
+        $tr.checkout-new-branch("master");
+        $tr.commit for ^2;
+        is $tr.output, q:to<EXPECTED>, "Master with one branch behind";
+            ┌─2─ master
+            └─ behind
             EXPECTED
     }
 
