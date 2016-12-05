@@ -1,13 +1,5 @@
 #! /usr/local/bin/perl6
 
-# TO DO:
-#
-# - make it work properly with ahead/behind branches
-# - indicate recently-worked-on branches (back to yesterday/2d ago)
-# - cache the branches' connection with Github
-# - indicate when a branch's PR is closed
-# - put "detached" child branches with their parents
-
 # --- copied from https://github.com/tadzik/Terminal-ANSIColor ---
 constant BOLD = "\e[1m";
 constant BOLD_OFF = "\e[22m";
