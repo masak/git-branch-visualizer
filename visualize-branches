@@ -199,16 +199,38 @@ multi MAIN() {
     }
 }
 
-constant $TEST_DIR = "$*TMPDIR/branch-visualizer-test-repo";
+class TestRepo {
+    constant $TEST_DIR = "$*TMPDIR/branch-visualizer-test-repo";
+
+    submethod BUILD {
+        self.cleanup;
+        shell("git init -q $TEST_DIR");
+    }
+
+    method commit {
+        shell("cd $TEST_DIR && git commit -q --allow-empty -m'1'");
+    }
+
+    method output {
+        my $output = scrub-colors(qqx[cd $TEST_DIR && $*PROGRAM-NAME]);
+        self.cleanup;
+        return $output;
+    }
+
+    method cleanup {
+        shell("rm -rf $TEST_DIR");
+    }
+}
 
 multi MAIN("test") {
     use Test;
 
-    shell("rm -rf $TEST_DIR");
-    shell("git init -q $TEST_DIR");
-    shell("cd $TEST_DIR && git commit -q --allow-empty -m'1'");
-    my $output = qqx[cd $TEST_DIR && $*PROGRAM-NAME];
-    is scrub-colors($output), "─ master\n", "Just a single master branch";
+    given TestRepo.new -> $tr {
+        $tr.commit;
+        is $tr.output, q:to<EXPECTED>, "Just a single master branch";
+            ─ master
+            EXPECTED
+    }
 
     done-testing;
 }
