@@ -163,7 +163,9 @@ multi MAIN() {
                 ($branch.diverged-remote ?? colored(" [NEEDS PUSH FORCE]", "bold blue") !! ""),
                 ($branch.pr ?? colored(" (PR #{$branch.pr})", "bold blue") !! "");
         }
-        say b($prefix);
+        if @steps-behind {
+            say b($prefix);
+        }
     }
 
     my $last-steps = 0;
@@ -207,18 +209,25 @@ class TestRepo {
         shell("git init -q $TEST_DIR");
     }
 
-    method commit {
-        shell("cd $TEST_DIR && git commit -q --allow-empty -m'1'");
+    method git-command($args) {
+        shell("cd $TEST_DIR && git $args");
     }
 
-    method output {
-        my $output = scrub-colors(qqx[cd $TEST_DIR && $*PROGRAM-NAME]);
-        self.cleanup;
-        return $output;
+    method commit {
+        self.git-command("commit -q --allow-empty -m'1'");
     }
 
     method cleanup {
         shell("rm -rf $TEST_DIR");
+    }
+
+    method output {
+        LEAVE { self.cleanup }
+        return scrub-colors(qqx[cd $TEST_DIR && $*PROGRAM-NAME]);
+    }
+
+    method checkout-new-branch($branch) {
+        self.git-command("checkout -q -b {$branch}");
     }
 }
 
@@ -229,6 +238,16 @@ multi MAIN("test") {
         $tr.commit;
         is $tr.output, q:to<EXPECTED>, "Just a single master branch";
             ─ master
+            EXPECTED
+    }
+
+    given TestRepo.new -> $tr {
+        $tr.commit;
+        $tr.checkout-new-branch("ahead");
+        $tr.commit for ^3;
+        is $tr.output, q:to<EXPECTED>, "Master with one branch ahead";
+            ─ master
+              └─3─ ahead
             EXPECTED
     }
 
