@@ -70,125 +70,130 @@ class Branch {
     has Str $.pr;
 }
 
-my %pr-of;
-for qqx[git ls-remote 2> /dev/null].lines -> $line {
-    next unless $line ~~ /^ (\w+) \t "refs/pull/" (\d+) "/head" $/;
-    %pr-of{~$0} = ~$1;
+multi MAIN() {
+    my %pr-of;
+    for qqx[git ls-remote 2> /dev/null].lines -> $line {
+        next unless $line ~~ /^ (\w+) \t "refs/pull/" (\d+) "/head" $/;
+        %pr-of{~$0} = ~$1;
+    }
+
+    my @branches = qx[git branch --no-color].lines.map: {
+        my $is-current = .substr(0, 1) eq "*";
+        my $name = .subst(/../, "");
+        next if $name ~~ /^ '('/;
+        my $ahead = +qqx[git log --oneline --first-parent {$master}..{$name} | wc -l].trim;
+        my $behind = +qqx[git log --oneline --first-parent {$name}..{$master} | wc -l].trim;
+        my $is-master = $name eq $master;
+        my $is-orphaned = qqx[git merge-base {$master} {$name}].lines == 0;
+        my $date = qqx[git show --pretty=format:%ci -s {$name}];
+        my $conflict = !$is-orphaned &&
+            ?qqx[git merge-tree `git merge-base master {$name}` master {$name} | grep '+<<<<<<< .our'];
+        my $remote-branch-exists = (shell "git show remotes/origin/{$name} > /dev/null 2>&1").exitcode == 0;
+        my $diverged-remote = $remote-branch-exists &&
+            ?qqx[git log --oneline {$name}..remotes/origin/{$name}].trim &&
+            ?qqx[git log --oneline remotes/origin/{$name}..{$name}].trim;
+        my $sha1 = qqx[git rev-parse {$name}].trim;
+        my $pr = %pr-of{$sha1} // "";
+
+        Branch.new(:$name, :$is-master, :$is-current, :$is-orphaned, :$ahead, :$behind,
+            :$date, :$conflict, :$diverged-remote, :$pr);
+    }
+    my $master-branch = @branches.first(*.name eq $master);
+
+    my @orphaned-branches;
+    my @behind-branches;
+    my @ahead-branches;
+    my %branch-of-steps-behind;
+    my %branches-steps-behind;
+
+    for @branches -> $branch {
+        if $branch.is-orphaned {
+            push @orphaned-branches, $branch;
+        }
+        elsif $branch.behind && $branch.ahead {
+            (%branches-steps-behind{$branch.behind} //= []).push: $branch;
+        }
+        elsif $branch.behind && !$branch.ahead {
+            push @behind-branches, $branch;
+            %branch-of-steps-behind{$branch.behind} = $branch;
+        }
+        elsif $branch.ahead && !$branch.behind {
+            push @ahead-branches, $branch;
+        }
+    }
+
+    sub b($text) { colored(~$text, "bold black") }
+    sub g($text) { colored(~$text, "green") }
+    sub gg($text) { ~$text }
+    sub inv($text) { colored(~$text, "black on_white") }
+
+    constant INITIAL_USER_NAME = /^ (<-[/]>+ "/") (.*) /;
+    sub highlight(Branch $branch) {
+        $branch.is-current
+            ?? ($branch.name ~~ INITIAL_USER_NAME
+                ?? $branch.name.subst(INITIAL_USER_NAME, { b($0) ~ inv($1) })
+                !! inv($branch.name))
+            !! $branch.is-orphaned
+                ?? b($branch.name)
+                !! $branch.name ~~ INITIAL_USER_NAME
+                    ?? $branch.name.subst(INITIAL_USER_NAME, { b($0) ~ gg($1) })
+                    !! gg($branch.name);
+    }
+
+    my @steps-behind = %branch-of-steps-behind.keys.sort(+*);
+    my @deltas = @steps-behind Z- [0, |@steps-behind];
+    say (@deltas ?? b("┌─") !! ""),
+        @deltas.map(&g).join(b("─┬─")),
+        b("─ "), highlight($master-branch);
+
+    if @ahead-branches {
+        my $prefix = (@deltas ?? "│ " !! "") ~ @deltas.map(" " x *.chars).join(" │ ") ~ "  ";
+        for @ahead-branches.sort(*.date).reverse.kv -> $i, $branch {
+            my $is-last = $i == @ahead-branches - 1;
+            say b($prefix),
+                b($is-last ?? "└─" !! "├─"),
+                g($branch.ahead),
+                b("─ "),
+                highlight($branch),
+                ($branch.conflict ?? colored(" [☣ CONFLICT ☣]", "bold red") !! ""),
+                ($branch.diverged-remote ?? colored(" [NEEDS PUSH FORCE]", "bold blue") !! ""),
+                ($branch.pr ?? colored(" (PR #{$branch.pr})", "bold blue") !! "");
+        }
+        say b($prefix);
+    }
+
+    my $last-steps = 0;
+    while @steps-behind {
+        my $steps = @steps-behind.shift;
+        @deltas.shift;
+        my $branch = %branch-of-steps-behind{$steps};
+        say (@deltas ?? b("│ ") !! ""),
+            @deltas.map(" " x *.chars).join(" " x 3),
+            (@deltas ?? " " !! ""),
+            b("└─ "),
+            highlight($branch);
+
+        my $prefix = (@deltas ?? "│ " !! "") ~ @deltas.map(" " x *.chars).join(" " x 3) ~ (@deltas ?? " " !! "") ~ "   ";
+        for %branches-steps-behind{$steps}.sort(*.date).reverse.kv -> $i, $branch {
+            my $is-last = $i == %branches-steps-behind{$steps} - 1;
+            say b($prefix),
+                b($is-last ?? "└─" !! "├─"),
+                g($branch.ahead),
+                b("─ "),
+                highlight($branch),
+                ($branch.conflict ?? colored(" [☣ CONFLICT ☣]", "bold red") !! colored(" (can be rebased)", "bold green")),
+                ($branch.diverged-remote ?? colored(" [NEEDS PUSH FORCE]", "bold blue") !! ""),
+                ($branch.pr ?? colored(" (PR #{$branch.pr})", "bold blue") !! "");
+        }
+        say b($prefix);
+    }
+
+    if @orphaned-branches {
+        for @orphaned-branches.sort(*.name) -> $branch {
+            say highlight($branch);
+        }
+    }
 }
 
-my @branches = qx[git branch --no-color].lines.map: {
-    my $is-current = .substr(0, 1) eq "*";
-    my $name = .subst(/../, "");
-    next if $name ~~ /^ '('/;
-    my $ahead = +qqx[git log --oneline --first-parent {$master}..{$name} | wc -l].trim;
-    my $behind = +qqx[git log --oneline --first-parent {$name}..{$master} | wc -l].trim;
-    my $is-master = $name eq $master;
-    my $is-orphaned = qqx[git merge-base {$master} {$name}].lines == 0;
-    my $date = qqx[git show --pretty=format:%ci -s {$name}];
-    my $conflict = !$is-orphaned &&
-        ?qqx[git merge-tree `git merge-base master {$name}` master {$name} | grep '+<<<<<<< .our'];
-    my $remote-branch-exists = (shell "git show remotes/origin/{$name} > /dev/null 2>&1").exitcode == 0;
-    my $diverged-remote = $remote-branch-exists &&
-        ?qqx[git log --oneline {$name}..remotes/origin/{$name}].trim &&
-        ?qqx[git log --oneline remotes/origin/{$name}..{$name}].trim;
-    my $sha1 = qqx[git rev-parse {$name}].trim;
-    my $pr = %pr-of{$sha1} // "";
-
-    Branch.new(:$name, :$is-master, :$is-current, :$is-orphaned, :$ahead, :$behind,
-        :$date, :$conflict, :$diverged-remote, :$pr);
-}
-my $master-branch = @branches.first(*.name eq $master);
-
-my @orphaned-branches;
-my @behind-branches;
-my @ahead-branches;
-my %branch-of-steps-behind;
-my %branches-steps-behind;
-
-for @branches -> $branch {
-    if $branch.is-orphaned {
-        push @orphaned-branches, $branch;
-    }
-    elsif $branch.behind && $branch.ahead {
-        (%branches-steps-behind{$branch.behind} //= []).push: $branch;
-    }
-    elsif $branch.behind && !$branch.ahead {
-        push @behind-branches, $branch;
-        %branch-of-steps-behind{$branch.behind} = $branch;
-    }
-    elsif $branch.ahead && !$branch.behind {
-        push @ahead-branches, $branch;
-    }
-}
-
-sub b($text) { colored(~$text, "bold black") }
-sub g($text) { colored(~$text, "green") }
-sub gg($text) { ~$text }
-sub inv($text) { colored(~$text, "black on_white") }
-
-constant INITIAL_USER_NAME = /^ (<-[/]>+ "/") (.*) /;
-sub highlight(Branch $branch) {
-    $branch.is-current
-        ?? ($branch.name ~~ INITIAL_USER_NAME
-            ?? $branch.name.subst(INITIAL_USER_NAME, { b($0) ~ inv($1) })
-            !! inv($branch.name))
-        !! $branch.is-orphaned
-            ?? b($branch.name)
-            !! $branch.name ~~ INITIAL_USER_NAME
-                ?? $branch.name.subst(INITIAL_USER_NAME, { b($0) ~ gg($1) })
-                !! gg($branch.name);
-}
-
-my @steps-behind = %branch-of-steps-behind.keys.sort(+*);
-my @deltas = @steps-behind Z- [0, |@steps-behind];
-say (@deltas ?? b("┌─") !! ""),
-    @deltas.map(&g).join(b("─┬─")),
-    b("─ "), highlight($master-branch);
-
-if @ahead-branches {
-    my $prefix = (@deltas ?? "│ " !! "") ~ @deltas.map(" " x *.chars).join(" │ ") ~ "  ";
-    for @ahead-branches.sort(*.date).reverse.kv -> $i, $branch {
-        my $is-last = $i == @ahead-branches - 1;
-        say b($prefix),
-            b($is-last ?? "└─" !! "├─"),
-            g($branch.ahead),
-            b("─ "),
-            highlight($branch),
-            ($branch.conflict ?? colored(" [☣ CONFLICT ☣]", "bold red") !! ""),
-            ($branch.diverged-remote ?? colored(" [NEEDS PUSH FORCE]", "bold blue") !! ""),
-            ($branch.pr ?? colored(" (PR #{$branch.pr})", "bold blue") !! "");
-    }
-    say b($prefix);
-}
-
-my $last-steps = 0;
-while @steps-behind {
-    my $steps = @steps-behind.shift;
-    @deltas.shift;
-    my $branch = %branch-of-steps-behind{$steps};
-    say (@deltas ?? b("│ ") !! ""),
-        @deltas.map(" " x *.chars).join(" " x 3),
-        (@deltas ?? " " !! ""),
-        b("└─ "),
-        highlight($branch);
-
-    my $prefix = (@deltas ?? "│ " !! "") ~ @deltas.map(" " x *.chars).join(" " x 3) ~ (@deltas ?? " " !! "") ~ "   ";
-    for %branches-steps-behind{$steps}.sort(*.date).reverse.kv -> $i, $branch {
-        my $is-last = $i == %branches-steps-behind{$steps} - 1;
-        say b($prefix),
-            b($is-last ?? "└─" !! "├─"),
-            g($branch.ahead),
-            b("─ "),
-            highlight($branch),
-            ($branch.conflict ?? colored(" [☣ CONFLICT ☣]", "bold red") !! colored(" (can be rebased)", "bold green")),
-            ($branch.diverged-remote ?? colored(" [NEEDS PUSH FORCE]", "bold blue") !! ""),
-            ($branch.pr ?? colored(" (PR #{$branch.pr})", "bold blue") !! "");
-    }
-    say b($prefix);
-}
-
-if @orphaned-branches {
-    for @orphaned-branches.sort(*.name) -> $branch {
-        say highlight($branch);
-    }
+multi MAIN("test") {
 }
