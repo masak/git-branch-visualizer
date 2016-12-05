@@ -85,7 +85,7 @@ my @branches = qx[git branch --no-color].lines.map: {
     my $is-master = $name eq $master;
     my $is-orphaned = qqx[git merge-base {$master} {$name}].lines == 0;
     my $date = qqx[git show --pretty=format:%ci -s {$name}];
-    my $conflict = ?qqx[git merge-base master {$name}] &&
+    my $conflict = !$is-orphaned &&
         ?qqx[git merge-tree `git merge-base master {$name}` master {$name} | grep '+<<<<<<< .our'];
     my $remote-branch-exists = (shell "git show remotes/origin/{$name} > /dev/null 2>&1").exitcode == 0;
     my $diverged-remote = $remote-branch-exists &&
