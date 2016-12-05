@@ -54,6 +54,10 @@ sub colored (Str $what, Str $how) is export {
 }
 # --- end https://github.com/tadzik/Terminal-ANSIColor ---
 
+sub scrub-colors($text) {
+    $text.subst(/"\e[" <-[m]>+ "m"/, "", :g);
+}
+
 my $name-column-width = 10;
 my $master = qx[pwd].trim ~~ / « rakudo $ / ?? "nom" !! "master";
 
@@ -198,19 +202,13 @@ multi MAIN() {
 constant $TEST_DIR = "$*TMPDIR/branch-visualizer-test-repo";
 
 multi MAIN("test") {
-    # But I would prefer to strip the colors instead of testing them
-    sub b($text) { colored(~$text, "bold black") }
-    sub g($text) { colored(~$text, "green") }
-    sub gg($text) { ~$text }
-    sub inv($text) { colored(~$text, "black on_white") }
-
     use Test;
 
     shell("rm -rf $TEST_DIR");
     shell("git init -q $TEST_DIR");
     shell("cd $TEST_DIR && git commit -q --allow-empty -m'1'");
     my $output = qqx[cd $TEST_DIR && $*PROGRAM-NAME];
-    is $output, b("─ ") ~ inv("master") ~ "\n", "Just a single master branch";
+    is scrub-colors($output), "─ master\n", "Just a single master branch";
 
     done-testing;
 }
