@@ -1,9 +1,6 @@
 #! /usr/local/bin/perl6
 
 # --- copied from https://github.com/tadzik/Terminal-ANSIColor ---
-constant BOLD = "\e[1m";
-constant BOLD_OFF = "\e[22m";
-
 my %attrs =
     reset      => "0",
     bold       => "1",
@@ -163,7 +160,7 @@ multi MAIN() {
                 ($branch.diverged-remote ?? colored(" [NEEDS PUSH FORCE]", "bold blue") !! ""),
                 ($branch.pr ?? colored(" (PR #{$branch.pr})", "bold blue") !! "");
         }
-        if @steps-behind {
+        if @steps-behind || @orphaned-branches {
             say b($prefix);
         }
     }
